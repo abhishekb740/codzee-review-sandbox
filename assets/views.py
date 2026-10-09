@@ -1,10 +1,12 @@
 from django.db import connection
 from django.utils import timezone
 from rest_framework import generics, mixins, status, viewsets
+from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from . import selectors, services
@@ -91,6 +93,7 @@ class HealthView(APIView):
 
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = []  # load balancers and Docker poll this; never rate-limit it
 
     def get(self, request):
         try:
@@ -103,3 +106,13 @@ class HealthView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return Response({"status": "ok", "database": "ok"})
+
+
+class ThrottledObtainAuthToken(ObtainAuthToken):
+    """POST /auth/token/ with the anonymous rate limit applied.
+
+    DRF's ObtainAuthToken sets throttle_classes = () on itself, so the project's
+    DEFAULT_THROTTLE_CLASSES never reach it and password guessing is unlimited.
+    """
+
+    throttle_classes = [AnonRateThrottle]

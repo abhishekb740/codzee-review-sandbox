@@ -110,7 +110,36 @@ REST_FRAMEWORK = {
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",
     ],
+    # Anonymous traffic is mostly the token endpoint, so a low anon rate also
+    # slows password guessing. Rates are per client IP (anon) or per user.
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    # How many reverse proxies sit in front of the app. DRF identifies anonymous
+    # clients by IP; with NUM_PROXIES unset it trusts the raw X-Forwarded-For
+    # header, so a client could send a new value per request and get a fresh
+    # throttle bucket every time. 0 = use REMOTE_ADDR; set 1 behind one load
+    # balancer so DRF takes the address that proxy appended.
+    "NUM_PROXIES": int(os.environ.get("NUM_PROXIES", "0")),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": os.environ.get("THROTTLE_ANON_RATE", "30/min"),
+        "user": os.environ.get("THROTTLE_USER_RATE", "300/min"),
+    },
 }
+
+# DRF throttling keeps its counters in the default cache. The local-memory
+# cache is per process, so with several gunicorn workers each worker would
+# count separately and the effective limit would multiply. Redis is shared.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.environ.get("CACHE_URL", "redis://localhost:6379/1"),
+    }
+}
+
+# Business rule 3: how many open check-outs one employee may hold.
+ASSET_MAX_OPEN_CHECKOUTS = int(os.environ.get("ASSET_MAX_OPEN_CHECKOUTS", "3"))
 
 # --- Celery ---------------------------------------------------------------
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")

@@ -46,3 +46,16 @@ class TestThrottling:
         monkeypatch.setattr(AnonRateThrottle, "THROTTLE_RATES", {"anon": "1/min"})
         client = APIClient()
         assert {client.get("/api/v1/health/").status_code for _ in range(5)} == {200}
+
+
+
+@pytest.mark.django_db
+def test_spoofed_forwarded_for_does_not_reset_the_anon_throttle(monkeypatch):
+    monkeypatch.setattr(AnonRateThrottle, "THROTTLE_RATES", {"anon": "2/min"})
+    client = APIClient()
+    codes = [
+        client.post("/api/v1/auth/token/", {"username": "x", "password": "wrong"},
+                    HTTP_X_FORWARDED_FOR=f"203.0.113.{i}").status_code
+        for i in range(3)
+    ]
+    assert codes == [400, 400, 429]

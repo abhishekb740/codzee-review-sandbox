@@ -116,6 +116,12 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
     ],
+    # How many reverse proxies sit in front of the app. DRF identifies anonymous
+    # clients by IP; with NUM_PROXIES unset it trusts the raw X-Forwarded-For
+    # header, so a client could send a new value per request and get a fresh
+    # throttle bucket every time. 0 = use REMOTE_ADDR; set 1 behind one load
+    # balancer so DRF takes the address that proxy appended.
+    "NUM_PROXIES": int(os.environ.get("NUM_PROXIES", "0")),
     "DEFAULT_THROTTLE_RATES": {
         "anon": os.environ.get("THROTTLE_ANON_RATE", "30/min"),
         "user": os.environ.get("THROTTLE_USER_RATE", "300/min"),

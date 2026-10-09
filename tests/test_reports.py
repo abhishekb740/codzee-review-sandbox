@@ -223,18 +223,26 @@ class TestOverdueFilters:
 def test_asset_list_with_holders_is_constant_queries(api, make_asset, make_employee, make_checkout,
                                                     django_assert_max_num_queries):
     now = timezone.now()
+    expected = {}
     for _ in range(8):
-        make_checkout(make_asset(), make_employee(), checked_out_at=now, due_at=now + timedelta(days=2))
-    make_asset()  # one asset with no holder
+        asset, emp = make_asset(), make_employee()
+        make_checkout(asset, emp, checked_out_at=now, due_at=now + timedelta(days=2))
+        expected[asset.asset_tag] = {"employee_code": emp.employee_code, "full_name": emp.full_name}
+    free = make_asset()  # one asset with no holder
+    expected[free.asset_tag] = None
+    # A returned check-out must not show up as the current holder.
+    returned = make_asset()
+    make_checkout(returned, make_employee(), checked_out_at=now - timedelta(days=3),
+                  due_at=now + timedelta(days=1), returned_at=now - timedelta(days=1))
+    expected[returned.asset_tag] = None
     with django_assert_max_num_queries(2):  # page count + page rows
         resp = api.get("/api/v1/assets/")
-    holders = [a["current_holder"] for a in resp.data["results"]]
-    assert holders.count(None) == 1
-    assert all(set(h) == {"employee_code", "full_name"} for h in holders if h)
+    actual = {a["asset_tag"]: a["current_holder"] for a in resp.data["results"]}
+    assert actual == expected
 
 
 @pytest.mark.django_db
-def test_health_failure_does_not_leak_exception_details(monkeypatch):
+def test_health_failure_does_not_leak_exception_details(monkeypatch, caplog):
     from django.db import OperationalError
 
     from assets import views
@@ -247,6 +255,9 @@ def test_health_failure_does_not_leak_exception_details(monkeypatch):
             return False
 
     monkeypatch.setattr(views.connection, "cursor", lambda: BrokenCursor())
-    resp = APIClient().get("/api/v1/health/")
+    with caplog.at_level("ERROR", logger="assets.views"):
+        resp = APIClient().get("/api/v1/health/")
     assert resp.status_code == 503
     assert resp.json() == {"status": "error", "database": "unreachable"}
+    # The cause is not returned to the caller, but operators still get it.
+    assert "secret-host:5432" in caplog.text

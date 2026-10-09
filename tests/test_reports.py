@@ -179,3 +179,85 @@ def test_health_is_public_and_reports_database():
 def test_list_endpoints_require_auth():
     assert APIClient().get("/api/v1/assets/").status_code == 401
     assert Asset.objects.count() == 0
+
+
+
+@pytest.mark.django_db
+class TestOverdueFilters:
+    URL = "/api/v1/reports/overdue/"
+
+    def _overdue(self, make_checkout, asset, employee):
+        now = timezone.now()
+        return make_checkout(asset, employee, checked_out_at=now - timedelta(days=5),
+                             due_at=now - timedelta(days=1))
+
+    def test_filter_by_category(self, api, make_asset, make_employee, make_checkout):
+        emp = make_employee()
+        cam = self._overdue(make_checkout, make_asset(category=Asset.Category.CAMERA), emp)
+        self._overdue(make_checkout, make_asset(category=Asset.Category.LAPTOP), emp)
+        resp = api.get(self.URL, {"category": "CAMERA"})
+        assert resp.status_code == 200
+        assert [r["checkout_id"] for r in resp.data["results"]] == [cam.id]
+
+    def test_filter_by_employee_code(self, api, make_asset, make_employee, make_checkout):
+        e1, e2 = make_employee(), make_employee()
+        mine = self._overdue(make_checkout, make_asset(), e1)
+        self._overdue(make_checkout, make_asset(), e2)
+        resp = api.get(self.URL, {"employee_code": e1.employee_code})
+        assert [r["checkout_id"] for r in resp.data["results"]] == [mine.id]
+
+    def test_unknown_category_is_400(self, api):
+        assert api.get(self.URL, {"category": "SPACESHIP"}).status_code == 400
+
+    def test_filtered_report_is_still_constant_queries(
+        self, api, make_asset, make_employee, make_checkout, django_assert_max_num_queries
+    ):
+        for _ in range(10):
+            self._overdue(make_checkout, make_asset(category=Asset.Category.SENSOR), make_employee())
+        with django_assert_max_num_queries(3):
+            resp = api.get(self.URL, {"category": "SENSOR"})
+        assert resp.data["count"] == 10
+
+
+@pytest.mark.django_db
+def test_asset_list_with_holders_is_constant_queries(api, make_asset, make_employee, make_checkout,
+                                                    django_assert_max_num_queries):
+    now = timezone.now()
+    expected = {}
+    for _ in range(8):
+        asset, emp = make_asset(), make_employee()
+        make_checkout(asset, emp, checked_out_at=now, due_at=now + timedelta(days=2))
+        expected[asset.asset_tag] = {"employee_code": emp.employee_code, "full_name": emp.full_name}
+    free = make_asset()  # one asset with no holder
+    expected[free.asset_tag] = None
+    # A returned check-out must not show up as the current holder.
+    returned = make_asset()
+    make_checkout(returned, make_employee(), checked_out_at=now - timedelta(days=3),
+                  due_at=now + timedelta(days=1), returned_at=now - timedelta(days=1))
+    expected[returned.asset_tag] = None
+    with django_assert_max_num_queries(2):  # page count + page rows
+        resp = api.get("/api/v1/assets/")
+    actual = {a["asset_tag"]: a["current_holder"] for a in resp.data["results"]}
+    assert actual == expected
+
+
+@pytest.mark.django_db
+def test_health_failure_does_not_leak_exception_details(monkeypatch, caplog):
+    from django.db import OperationalError
+
+    from assets import views
+
+    class BrokenCursor:
+        def __enter__(self):
+            raise OperationalError("could not connect to server: secret-host:5432")
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(views.connection, "cursor", lambda: BrokenCursor())
+    with caplog.at_level("ERROR", logger="assets.views"):
+        resp = APIClient().get("/api/v1/health/")
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "error", "database": "unreachable"}
+    # The cause is not returned to the caller, but operators still get it.
+    assert "secret-host:5432" in caplog.text

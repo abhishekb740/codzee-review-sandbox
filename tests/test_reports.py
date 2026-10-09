@@ -179,3 +179,74 @@ def test_health_is_public_and_reports_database():
 def test_list_endpoints_require_auth():
     assert APIClient().get("/api/v1/assets/").status_code == 401
     assert Asset.objects.count() == 0
+
+
+
+@pytest.mark.django_db
+class TestOverdueFilters:
+    URL = "/api/v1/reports/overdue/"
+
+    def _overdue(self, make_checkout, asset, employee):
+        now = timezone.now()
+        return make_checkout(asset, employee, checked_out_at=now - timedelta(days=5),
+                             due_at=now - timedelta(days=1))
+
+    def test_filter_by_category(self, api, make_asset, make_employee, make_checkout):
+        emp = make_employee()
+        cam = self._overdue(make_checkout, make_asset(category=Asset.Category.CAMERA), emp)
+        self._overdue(make_checkout, make_asset(category=Asset.Category.LAPTOP), emp)
+        resp = api.get(self.URL, {"category": "CAMERA"})
+        assert resp.status_code == 200
+        assert [r["checkout_id"] for r in resp.data["results"]] == [cam.id]
+
+    def test_filter_by_employee_code(self, api, make_asset, make_employee, make_checkout):
+        e1, e2 = make_employee(), make_employee()
+        mine = self._overdue(make_checkout, make_asset(), e1)
+        self._overdue(make_checkout, make_asset(), e2)
+        resp = api.get(self.URL, {"employee_code": e1.employee_code})
+        assert [r["checkout_id"] for r in resp.data["results"]] == [mine.id]
+
+    def test_unknown_category_is_400(self, api):
+        assert api.get(self.URL, {"category": "SPACESHIP"}).status_code == 400
+
+    def test_filtered_report_is_still_constant_queries(
+        self, api, make_asset, make_employee, make_checkout, django_assert_max_num_queries
+    ):
+        for _ in range(10):
+            self._overdue(make_checkout, make_asset(category=Asset.Category.SENSOR), make_employee())
+        with django_assert_max_num_queries(3):
+            resp = api.get(self.URL, {"category": "SENSOR"})
+        assert resp.data["count"] == 10
+
+
+@pytest.mark.django_db
+def test_asset_list_with_holders_is_constant_queries(api, make_asset, make_employee, make_checkout,
+                                                    django_assert_max_num_queries):
+    now = timezone.now()
+    for _ in range(8):
+        make_checkout(make_asset(), make_employee(), checked_out_at=now, due_at=now + timedelta(days=2))
+    make_asset()  # one asset with no holder
+    with django_assert_max_num_queries(2):  # page count + page rows
+        resp = api.get("/api/v1/assets/")
+    holders = [a["current_holder"] for a in resp.data["results"]]
+    assert holders.count(None) == 1
+    assert all(set(h) == {"employee_code", "full_name"} for h in holders if h)
+
+
+@pytest.mark.django_db
+def test_health_failure_does_not_leak_exception_details(monkeypatch):
+    from django.db import OperationalError
+
+    from assets import views
+
+    class BrokenCursor:
+        def __enter__(self):
+            raise OperationalError("could not connect to server: secret-host:5432")
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(views.connection, "cursor", lambda: BrokenCursor())
+    resp = APIClient().get("/api/v1/health/")
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "error", "database": "unreachable"}

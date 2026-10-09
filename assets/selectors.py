@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from django.db.models import Avg, Count, DurationField, ExpressionWrapper, F, OuterRef, Q, QuerySet, Subquery
+from django.db.models.functions import JSONObject
 
 from .models import Asset, CheckOut, Employee
 
@@ -75,11 +76,21 @@ def employee_summary(employee_code: str, now: datetime) -> dict | None:
 def assets_with_holder() -> QuerySet[Asset]:
     """Assets annotated with their current holder (from the single open check-out).
 
-    Correlated subqueries keep the asset list endpoint at one query instead of
-    one extra lookup per asset.
+    One correlated subquery returns the holder as a JSON object, instead of one
+    subquery per field: the open check-out and its employee are looked up once
+    per asset row, and the asset list endpoint stays at one query.
     """
     open_checkout = CheckOut.objects.filter(asset=OuterRef("pk"), returned_at__isnull=True)
-    return Asset.objects.annotate(
-        holder_code=Subquery(open_checkout.values("employee__employee_code")[:1]),
-        holder_name=Subquery(open_checkout.values("employee__full_name")[:1]),
-    )
+    holder = open_checkout.values(
+        json=JSONObject(employee_code="employee__employee_code", full_name="employee__full_name")
+    )[:1]
+    return Asset.objects.annotate(current_holder_json=Subquery(holder))
+
+
+def filter_overdue(qs: QuerySet[CheckOut], *, category: str | None, employee_code: str | None) -> QuerySet[CheckOut]:
+    """Optional filters for the overdue report. Both stay inside the same JOINed query."""
+    if category:
+        qs = qs.filter(asset__category=category)
+    if employee_code:
+        qs = qs.filter(employee__employee_code=employee_code)
+    return qs

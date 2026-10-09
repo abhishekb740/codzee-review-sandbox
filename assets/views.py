@@ -1,3 +1,5 @@
+import logging
+
 from django.db import connection
 from django.utils import timezone
 from rest_framework import generics, mixins, status, viewsets
@@ -13,9 +15,12 @@ from .serializers import (
     AssetSerializer,
     CheckOutCreateSerializer,
     CheckOutSerializer,
+    OverdueFilterSerializer,
     OverdueRowSerializer,
     ReturnSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AssetViewSet(
@@ -69,12 +74,19 @@ class EmployeeSummaryView(APIView):
 
 
 class OverdueReportView(generics.ListAPIView):
-    """GET /reports/overdue/ - open check-outs past due, most overdue first (paginated)."""
+    """GET /reports/overdue/?category=&employee_code= - open check-outs past due,
+    most overdue first (paginated). An unknown category is a 400."""
 
     serializer_class = OverdueRowSerializer
 
     def get_queryset(self):
-        return selectors.overdue_checkouts(now=self._now())
+        params = OverdueFilterSerializer(data=self.request.query_params)
+        params.is_valid(raise_exception=True)
+        return selectors.filter_overdue(
+            selectors.overdue_checkouts(now=self._now()),
+            category=params.validated_data.get("category"),
+            employee_code=params.validated_data.get("employee_code"),
+        )
 
     def get_serializer_context(self):
         return {**super().get_serializer_context(), "now": self._now()}
@@ -97,9 +109,12 @@ class HealthView(APIView):
             with connection.cursor() as cursor:
                 cursor.execute("SELECT 1")
                 cursor.fetchone()
-        except Exception as exc:  # noqa: BLE001 - any DB failure means "not healthy"
+        except Exception:  # noqa: BLE001 - any DB failure means "not healthy"
+            # Log the cause for operators; the public, unauthenticated response
+            # should not reveal driver or exception details.
+            logger.exception("health check: database unreachable")
             return Response(
-                {"status": "error", "database": "unreachable", "detail": exc.__class__.__name__},
+                {"status": "error", "database": "unreachable"},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return Response({"status": "ok", "database": "ok"})

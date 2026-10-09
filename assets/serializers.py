@@ -16,11 +16,8 @@ class AssetSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "current_holder", "created_at", "updated_at"]
 
     def get_current_holder(self, obj):
-        # holder_code/holder_name are annotated by selectors.assets_with_holder().
-        code = getattr(obj, "holder_code", None)
-        if code is None:
-            return None
-        return {"employee_code": code, "full_name": obj.holder_name}
+        # Annotated by selectors.assets_with_holder(): {employee_code, full_name} or None.
+        return getattr(obj, "current_holder_json", None)
 
     def validate_status(self, value):
         # CHECKED_OUT is only reachable through POST /checkouts/, which also
@@ -57,6 +54,11 @@ class CheckOutCreateSerializer(serializers.Serializer):
 class ReturnSerializer(serializers.Serializer):
     condition_note = serializers.CharField(required=False, allow_blank=True, default="")
     needs_maintenance = serializers.BooleanField(required=False, default=False)
+
+
+class OverdueFilterSerializer(serializers.Serializer):
+    category = serializers.ChoiceField(choices=Asset.Category.choices, required=False)
+    employee_code = serializers.CharField(max_length=16, required=False)
 
 
 class OverdueRowSerializer(serializers.Serializer):

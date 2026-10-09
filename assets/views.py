@@ -45,6 +45,9 @@ class CheckOutViewSet(
 
     serializer_class = CheckOutSerializer
     queryset = CheckOut.objects.select_related("asset", "employee").order_by("-checked_out_at", "-id")
+    # Only route numeric ids. A non-numeric id such as /checkouts/abc/extend/
+    # used to reach .get(pk="abc"), raise ValueError and become a 500.
+    lookup_value_regex = r"\d+"
 
     def create(self, request):
         data = CheckOutCreateSerializer(data=request.data)

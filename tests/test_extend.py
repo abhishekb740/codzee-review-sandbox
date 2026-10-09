@@ -61,3 +61,10 @@ class TestExtend:
         resp = APIClient().post(extend_url(co.id), {"due_at": "2030-01-01T00:00:00Z"}, format="json")
         assert resp.status_code == 401
         assert CheckOut.objects.get(pk=co.pk).due_at == co.due_at
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("action", ["extend", "return"])
+def test_non_numeric_checkout_id_is_404_not_500(api, action):
+    resp = api.post(f"/api/v1/checkouts/abc/{action}/", {"due_at": "2030-01-01T00:00:00Z"}, format="json")
+    assert resp.status_code == 404

@@ -25,13 +25,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework.exceptions import APIException, NotFound, ValidationError
 
 from .models import Asset, CheckOut, Employee
 
-MAX_OPEN_CHECKOUTS = 3
 MAX_LOAN_DAYS = 30
 
 
@@ -78,11 +78,14 @@ def check_out(*, asset_tag: str, employee_code: str, due_at: datetime) -> CheckO
             if asset.status != Asset.Status.AVAILABLE:
                 raise Conflict(f"Asset '{asset_tag}' is not available (status {asset.status}).")
 
+            # Read at call time, not import time, so the limit can be changed by
+            # configuration (and overridden in tests) without a code change.
+            limit = settings.ASSET_MAX_OPEN_CHECKOUTS
             open_count = CheckOut.objects.filter(employee=employee, returned_at__isnull=True).count()
-            if open_count >= MAX_OPEN_CHECKOUTS:
+            if open_count >= limit:
                 raise Conflict(
                     f"Employee '{employee_code}' already holds {open_count} open check-outs "
-                    f"(limit {MAX_OPEN_CHECKOUTS})."
+                    f"(limit {limit})."
                 )
 
             # Rule 5: both writes in one transaction - they commit or roll back together.

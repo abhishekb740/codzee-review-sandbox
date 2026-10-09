@@ -2,10 +2,19 @@ from datetime import date, timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from assets.models import Asset, CheckOut, Employee
+
+
+@pytest.fixture(autouse=True)
+def _clear_cache():
+    """Throttle counters live in the cache; never let them leak between tests."""
+    cache.clear()
+    yield
+    cache.clear()
 
 
 @pytest.fixture

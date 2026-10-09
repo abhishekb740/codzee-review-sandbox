@@ -13,6 +13,7 @@ from .serializers import (
     AssetSerializer,
     CheckOutCreateSerializer,
     CheckOutSerializer,
+    ExtendSerializer,
     OverdueRowSerializer,
     ReturnSerializer,
 )
@@ -39,7 +40,8 @@ class CheckOutViewSet(
     mixins.RetrieveModelMixin,
     viewsets.GenericViewSet,
 ):
-    """POST /checkouts/, GET /checkouts/, GET /checkouts/{id}/, POST /checkouts/{id}/return/"""
+    """POST /checkouts/, GET /checkouts/, GET /checkouts/{id}/,
+    POST /checkouts/{id}/return/, POST /checkouts/{id}/extend/"""
 
     serializer_class = CheckOutSerializer
     queryset = CheckOut.objects.select_related("asset", "employee").order_by("-checked_out_at", "-id")
@@ -55,6 +57,13 @@ class CheckOutViewSet(
         data = ReturnSerializer(data=request.data)
         data.is_valid(raise_exception=True)
         checkout = services.return_checkout(checkout_id=pk, **data.validated_data)
+        return Response(CheckOutSerializer(checkout).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="extend")
+    def extend(self, request, pk=None):
+        data = ExtendSerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        checkout = services.extend_checkout(checkout_id=pk, **data.validated_data)
         return Response(CheckOutSerializer(checkout).data, status=status.HTTP_200_OK)
 
 

@@ -96,6 +96,29 @@ def check_out(*, asset_tag: str, employee_code: str, due_at: datetime) -> CheckO
     return checkout
 
 
+def extend_checkout(*, checkout_id: int, due_at: datetime) -> CheckOut:
+    """Move an open check-out's due date later.
+
+    The new due_at follows rule 4 (future, at most MAX_LOAN_DAYS from now) and
+    must be later than the current one. The check-out row is locked so that a
+    concurrent return and extend cannot interleave.
+    """
+    now = timezone.now()
+    validate_due_at(due_at, now)
+    with transaction.atomic():
+        try:
+            checkout = CheckOut.objects.select_for_update().get(pk=checkout_id)
+        except CheckOut.DoesNotExist:
+            raise NotFound(f"Check-out {checkout_id} not found.") from None
+        if checkout.returned_at is not None:
+            raise Conflict(f"Check-out {checkout_id} was already returned; it cannot be extended.")
+        if due_at <= checkout.due_at:
+            raise ValidationError({"due_at": "New due_at must be later than the current due_at."})
+        checkout.due_at = due_at
+        checkout.save(update_fields=["due_at"])
+    return checkout
+
+
 def return_checkout(*, checkout_id: int, condition_note: str = "", needs_maintenance: bool = False) -> CheckOut:
     """Rule 6: close a check-out and release (or quarantine) the asset."""
     with transaction.atomic():
